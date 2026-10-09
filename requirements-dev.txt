@@ -1,0 +1,4 @@
+-r requirements.txt
+pygame-ce
+pygbag
+httpx

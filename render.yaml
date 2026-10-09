@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: pawhabit
+    runtime: docker
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_PASS
+        sync: false
+      - key: DATABASE_URL
+        sync: false   # tuy chon: Postgres (Supabase/Render). Bo trong = SQLite
