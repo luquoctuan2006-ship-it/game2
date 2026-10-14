@@ -24,7 +24,7 @@ if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
-ADMIN_PASS = os.getenv("ADMIN_PASS", "admin123")
+ADMIN_PASS = os.getenv("ADMIN_PASS")
 WEB_DIR = Path(os.getenv("WEB_DIR", Path(__file__).resolve().parent.parent / "game" / "build" / "web"))
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
