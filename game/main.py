@@ -424,7 +424,10 @@ class App:
     def logout(self, silent=False):
         self.net.token = None
         self.save_token("")
-        self.st, self.scene, self.fields, self.focus = None, "auth", {}, None
+        self.st, self.scene, self.fields, self.focus = None, "auth", {}, "user"
+        self.mode, self.tab, self.stats, self.rank_rows, self.admin_rows = "login", "home", None, [], []
+        self.reminded.clear()
+        self.click = None
         if not silent:
             self.toast("Đã đăng xuất", "info")
 
@@ -590,6 +593,8 @@ class App:
             self.screen.blit(sf, (0, 0))
             self.panel((16, TOP + 8, W - 32, H - TOP - NAV - 16), CREAM)
         getattr(self, "t_" + t)(dt_)
+        if self.scene != "main" or not self.st:  # vừa đăng xuất ngay trong tab -> dừng vẽ, sang màn đăng nhập
+            return
         self.topbar()
         self.navbar()
 

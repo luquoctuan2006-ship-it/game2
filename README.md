@@ -4,13 +4,15 @@ Cấu trúc: `game/` (client pygame, build web bằng pygbag), `backend/` (FastA
 
 ## Chạy thử trên máy
     pip install -r requirements-dev.txt
-    python -m uvicorn backend.app:app --port 8000        # terminal 1
-    cd game && python main.py                  # terminal 2 (cua so pygame)
+    python -m uvicorn backend.app:app --port 8001        # terminal 1
+    cd game sau đó python main.py                  # terminal 2 (cua so pygame)
 Test backend: `python -m backend.test_api`
 Admin mặc định: admin / admin123 (đổi bằng biến ADMIN_PASS).
 
 ## Build web + deploy
-    python -m pygbag --build game              # ra game/build/web
+    $env:PYTHONUTF8 = "1"
+    python -m pygbag --build game             # ra game/build/web
+    
     WEB_DIR=game/build/web uvicorn backend.app:app --port 8000
 Deploy: đẩy repo lên GitHub, tạo Web Service kiểu Docker trên Render/Railway/Fly (có sẵn Dockerfile, render.yaml).
 Đặt biến môi trường: SECRET_KEY, ADMIN_PASS, (tuỳ chọn) DATABASE_URL=Postgres.
