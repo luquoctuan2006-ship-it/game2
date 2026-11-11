@@ -10,6 +10,7 @@ import sys
 import threading
 
 WEB = sys.platform == "emscripten"
+LOCAL_API = "http://localhost:8001"   # cổng API khi chạy thử trên máy (đổi nếu bạn chạy cổng khác)
 
 if WEB:
     import platform  # pygbag cung cấp platform.window
@@ -26,13 +27,15 @@ if WEB:
           window.__pg.res[id]=JSON.stringify({s:r.status,t:t});});})
         .catch(function(e){window.__pg.res[id]=JSON.stringify({s:0,t:String(e)});});
       };
-      window.__pgnotify=function(msg){
-        try{ if('Notification' in window){
-          if(Notification.permission==='granted'){new Notification('PawHabit',{body:msg});}
-          else if(Notification.permission==='default'){Notification.requestPermission();}
-        }}catch(e){}
-      };
     }
+    window.__pgnotify=function(msg){
+      try{
+        if(!('Notification' in window)){return 'unsupported';}
+        if(Notification.permission==='granted'){new Notification('PawHabit',{body:msg});return 'sent';}
+        if(Notification.permission==='default'){Notification.requestPermission();return 'asked';}
+        return 'denied';
+      }catch(e){return 'error:'+e;}
+    };
     """
 
 
@@ -49,9 +52,16 @@ class Net:
         self._id = 0
         if WEB:
             platform.window.eval(_JS)
-            self.base = "http://localhost:8001"
+            api = str(platform.window.eval("(new URLSearchParams(location.search).get('api')||'')"))
+            host = str(platform.window.eval("location.hostname"))
+            if api.startswith("http"):                    # 1) ?api=http://... được ưu tiên
+                self.base = api.rstrip("/")
+            elif host in ("localhost", "127.0.0.1"):      # 2) chạy thử trên máy
+                self.base = LOCAL_API
+            else:                                         # 3) đã deploy: API cùng domain với trang game
+                self.base = str(platform.window.eval("location.origin"))
         else:
-            self.base = os.getenv("PAWHABIT_URL","http://127.0.0.1:8001")
+            self.base = os.getenv("PAWHABIT_URL", LOCAL_API)
 
     @property
     def busy(self):
@@ -115,13 +125,40 @@ class Net:
                     if isinstance(msg, list):  # lỗi validate của pydantic
                         msg = "Dữ liệu nhập không hợp lệ (tên 3-24 ký tự chữ/số, mật khẩu ≥ 6)"
                     if r.status == 0:
-                        msg = "Không kết nối được máy chủ"
+                        why = r.data.get("detail", "") if isinstance(r.data, dict) else ""
+                        msg = "Không kết nối được %s (%s)" % (self.base, str(why)[:50])
+                    elif r.status in (404, 405) and WEB:
+                        msg = "Không thấy API tại %s – kiểm tra cổng hoặc thêm ?api=URL" % self.base
                     if r.err:
                         r.err(r.status, msg or "Lỗi không xác định")
 
     def notify(self, msg):
-        if WEB:
-            try:
-                platform.window.eval("window.__pgnotify(%s)" % json.dumps(msg))
-            except Exception:
-                pass
+        """Trả về: sent | asked | denied | unsupported | desktop | error:..."""
+        if not WEB:
+            return "desktop"
+        try:
+            return str(platform.window.eval("window.__pgnotify(%s)" % json.dumps(msg)))
+        except Exception as e:
+            return "error:%s" % e
+
+    def copy(self, text):
+        """Sao chép vào clipboard (chỉ bản web). Trả về: ok | desktop | error:..."""
+        if not WEB:
+            return "desktop"
+        try:
+            return str(platform.window.eval(
+                "(function(t){try{navigator.clipboard.writeText(t);return 'ok';}catch(e){return 'error:'+e;}})(%s)" % json.dumps(text)))
+        except Exception as e:
+            return "error:%s" % e
+
+    def open_url(self, url):
+        """Mở link ở tab/trình duyệt mới."""
+        try:
+            if WEB:
+                platform.window.eval("window.open(%s,'_blank')" % json.dumps(url))
+            else:
+                import webbrowser
+                webbrowser.open(url)
+            return "ok"
+        except Exception as e:
+            return "error:%s" % e

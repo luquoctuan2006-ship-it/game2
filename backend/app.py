@@ -8,9 +8,10 @@ import os
 import secrets
 import time
 from pathlib import Path
-from dotenv import load_dotenv
+
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer, String,
@@ -18,13 +19,20 @@ from sqlalchemy import (Boolean, Column, Float, ForeignKey, Integer, String,
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from . import rules as R
-load_dotenv()
+
+try:  # đọc file .env nếu có cài python-dotenv (không bắt buộc)
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./pawhabit.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
-ADMIN_PASS = os.getenv("ADMIN_PASS")
+ADMIN_PASS = os.getenv("ADMIN_PASS")  # bắt buộc đặt trong môi trường/.env, không có mặc định
+ASSET_DIR = Path(os.getenv("ASSET_DIR", Path(__file__).resolve().parent.parent / "game" / "assets"))
 WEB_DIR = Path(os.getenv("WEB_DIR", Path(__file__).resolve().parent.parent / "game" / "build" / "web"))
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
@@ -110,6 +118,18 @@ class QuestClaim(Base):
     quest_id = Column(String(16))
     period = Column(String(10))
     __table_args__ = (UniqueConstraint("user_id", "quest_id", "period"),)
+
+
+class Transaction(Base):
+    """Nhật ký coin: mỗi lần cộng/trừ coin có đúng một dòng (dùng để kiểm toán, chống gian lận)."""
+    __tablename__ = "transactions"
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    delta = Column(Integer, nullable=False)          # +nhận / -tiêu
+    reason = Column(String(16), nullable=False)      # starter | habit | quest | buy
+    ref = Column(String(60), default="")             # tên habit / nhiệm vụ / vật phẩm
+    balance = Column(Integer, nullable=False)        # số dư SAU giao dịch
+    ts = Column(Float, default=time.time, index=True)
 
 
 # ----------------------------------------------------------------- helpers
@@ -243,6 +263,10 @@ def log_action(db, uid, kind):
     db.add(Action(user_id=uid, kind=kind, day=today_str(), week=week_str()))
 
 
+def add_tx(db, uid, delta, reason, ref, balance):
+    db.add(Transaction(user_id=uid, delta=int(delta), reason=reason, ref=(ref or "")[:60], balance=int(balance)))
+
+
 def quest_progress(db, user, pet, habits):
     day, wk = today_str(), week_str()
     out = []
@@ -326,10 +350,16 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(engine)
+    if not ADMIN_PASS:
+        print("CANH BAO: chua dat ADMIN_PASS -> khong tao/cap nhat tai khoan admin")
+        return
     with SessionLocal() as db:
-        if not db.query(User).filter_by(username=ADMIN_USER).first():
+        admin = db.query(User).filter_by(username=ADMIN_USER).first()
+        if not admin:
             db.add(User(username=ADMIN_USER, pw_hash=hash_pw(ADMIN_PASS), role="admin"))
-            db.commit()
+        elif not check_pw(ADMIN_PASS, admin.pw_hash):
+            admin.pw_hash = hash_pw(ADMIN_PASS)   # đổi ADMIN_PASS trong env => mật khẩu admin đổi theo
+        db.commit()
 
 
 @app.get("/api/health")
@@ -378,6 +408,7 @@ def create_pet(p: PetIn, user: User = Depends(current_user), db: Session = Depen
         db.add(Pet(user_id=user.id, name=name, breed=p.breed, coins=R.STARTER_COINS))
         for k, n in R.STARTER_ITEMS.items():
             add_item(db, user.id, k, n)
+        add_tx(db, user.id, R.STARTER_COINS, "starter", "", R.STARTER_COINS)
     db.commit()
     return {"state": build_state(db, user)}
 
@@ -441,6 +472,7 @@ def complete(hid: int, user: User = Depends(current_user), db: Session = Depends
         pet.coins += coins
         pet.xp += xp
         pet.happy = R.clamp(pet.happy + 5)
+        add_tx(db, user.id, coins, "habit", h.title, pet.coins)
     db.commit()
     return {"state": build_state(db, user), "reward": {"coins": coins, "xp": xp, "capped": not reward}}
 
@@ -461,6 +493,7 @@ def buy(i: ItemIn, user: User = Depends(current_user), db: Session = Depends(get
     if pet.coins < item["price"]:
         raise HTTPException(402, "Không đủ coin")
     pet.coins -= item["price"]
+    add_tx(db, user.id, -item["price"], "buy", item["name"], pet.coins)
     add_item(db, user.id, i.item_id)
     db.commit()
     return {"state": build_state(db, user)}
@@ -506,6 +539,7 @@ def claim(qid: str, user: User = Depends(current_user), db: Session = Depends(ge
     db.add(QuestClaim(user_id=user.id, quest_id=qid, period=period))
     pet.coins += q["coins"]
     pet.xp += q["xp"]
+    add_tx(db, user.id, q["coins"], "quest", q["title"], pet.coins)
     db.commit()
     return {"state": build_state(db, user), "reward": {"coins": q["coins"], "xp": q["xp"]}}
 
@@ -575,13 +609,133 @@ def admin_role(uid: int, r: RoleIn, a: User = Depends(admin_user), db: Session =
 @app.delete("/api/admin/users/{uid}")
 def admin_delete(uid: int, a: User = Depends(admin_user), db: Session = Depends(get_db)):
     t = _target(db, uid, a)
-    for M in (QuestClaim, Action, Inventory, HabitLog, Habit, Pet):
+    for M in (QuestClaim, Action, Inventory, HabitLog, Habit, Transaction, Pet):
         db.query(M).filter_by(user_id=t.id).delete()
     db.delete(t)
     db.commit()
     return admin_users(a, db)
 
 
-# ------------------------------------------------------------- static web build (cùng origin => không lỗi CORS)
+# ------------------------------------------------------------- lịch sử giao dịch
+def _tx_rows(rows):
+    return [{"id": t.id, "user": name, "delta": t.delta, "reason": t.reason, "ref": t.ref,
+             "balance": t.balance, "ts": t.ts} for t, name in rows]
+
+
+@app.get("/api/transactions")
+def my_transactions(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Người chơi chỉ xem được giao dịch của chính mình."""
+    rows = (db.query(Transaction, User.username).join(User, User.id == Transaction.user_id)
+            .filter(Transaction.user_id == user.id).order_by(Transaction.id.desc()).limit(50).all())
+    return {"transactions": _tx_rows(rows)}
+
+
+@app.get("/api/admin/transactions")
+def admin_transactions(user_id: int | None = None, limit: int = 100, _: User = Depends(admin_user),
+                       db: Session = Depends(get_db)):
+    q = db.query(Transaction, User.username).join(User, User.id == Transaction.user_id)
+    if user_id is not None:
+        q = q.filter(Transaction.user_id == user_id)
+    rows = q.order_by(Transaction.id.desc()).limit(max(1, min(limit, 500))).all()
+    return {"transactions": _tx_rows(rows)}
+
+
+# ------------------------------------------------------------- trang trưng bày công khai (không cần đăng nhập)
+@app.get("/api/public/pet/{username}")
+def public_pet(username: str, db: Session = Depends(get_db)):
+    u = db.query(User).filter(func.lower(User.username) == username.lower()).first()
+    pet = db.get(Pet, u.id) if u and not u.banned else None
+    if not pet:
+        raise HTTPException(404, "Không tìm thấy thú cưng")
+    refresh_pet(db, pet)          # chỉ để tính mood hiện tại; không commit nên không ghi gì vào DB
+    d = pet_dict(pet)
+    acc = d["accessory"]
+    return {"username": u.username, "pet": {
+        "name": d["name"], "breed": d["breed"], "breed_name": d["breed_name"], "level": d["level"],
+        "stage": d["stage"], "stage_name": d["stage_name"], "streak": d["streak"],
+        "best_streak": d["best_streak"], "total_done": d["total_done"], "mood": d["mood"],
+        "evo_score": d["evo_score"], "accessory": acc,
+        "accessory_name": R.ITEMS[acc]["name"] if acc in R.ITEMS else ""}}
+
+
+PUBLIC_HTML = r"""<!doctype html>
+<html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PawHabit – Thú cưng</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;font-family:system-ui,"Segoe UI",sans-serif;color:#3e2c24;background:#9ad35a url(/pet-assets/background.png) center/cover no-repeat}
+.card{background:#fcf6e8;border:2px solid #e2d0b2;border-radius:18px;padding:22px;width:min(94vw,420px);text-align:center;box-shadow:0 10px 30px rgba(0,0,0,.28);margin:16px}
+h1{margin:0 0 2px;font-size:26px}
+.sub{color:#8a7a6c;font-size:14px;margin-bottom:6px}
+.stage{display:flex;align-items:center;justify-content:center;min-height:180px;margin:8px 0}
+#dog{image-rendering:pixelated;background-repeat:no-repeat}
+.legend #dog{filter:drop-shadow(0 0 14px #ffd75a)}
+.badge{display:inline-block;background:#ee8e32;color:#fff;border-radius:999px;padding:3px 12px;font-weight:600;font-size:14px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0}
+.grid div{background:#fffcf4;border:2px solid #e2d0b2;border-radius:12px;padding:8px 4px}
+.grid b{display:block;font-size:20px;color:#ee8e32}
+.grid span{font-size:12px;color:#8a7a6c}
+.acc{font-size:14px;margin-bottom:10px}
+button,a.btn{font:inherit;border:0;border-radius:10px;padding:9px 14px;margin:3px;cursor:pointer;color:#fff;text-decoration:none;display:inline-block}
+.b1{background:#62b254}.b2{background:#5096dc}
+#msg{padding:30px 0}
+</style></head><body>
+<div class="card" id="card"><div id="msg">Đang tải…</div></div>
+<script>
+(function(){
+var card=document.getElementById('card');
+var uname=decodeURIComponent(location.pathname.split('/').filter(Boolean).pop()||'');
+var MOOD={happy:'Rất vui',normal:'Bình thường',sad:'Buồn',sick:'Ốm yếu'};
+var ZOOM=[2,2.5,3,3.4];
+function el(tag,cls,text){var e=document.createElement(tag);if(cls){e.className=cls;}if(text!==undefined){e.textContent=text;}return e;}
+function fail(t){card.textContent='';var m=el('div','',t);m.id='msg';card.appendChild(m);var a=el('a','btn b1','Chơi PawHabit');a.href='/';card.appendChild(a);}
+fetch('/api/public/pet/'+encodeURIComponent(uname))
+ .then(function(r){if(!r.ok){throw new Error(r.status===404?'Không tìm thấy thú cưng này':'Lỗi máy chủ');}return r.json();})
+ .then(render).catch(function(e){fail(e.message);});
+function render(d){
+  var p=d.pet;card.textContent='';
+  if(p.stage>=3){card.classList.add('legend');}
+  document.title=p.name+' – PawHabit';
+  card.appendChild(el('h1','',p.name));
+  card.appendChild(el('div','sub','Của '+d.username+' · '+p.breed_name));
+  var stage=el('div','stage');var dog=el('div');dog.id='dog';stage.appendChild(dog);card.appendChild(stage);
+  card.appendChild(el('span','badge',p.stage_name+' · Lv '+p.level));
+  var g=el('div','grid');
+  [[p.streak,'Streak (ngày)'],[p.total_done,'Thói quen đã làm'],[MOOD[p.mood]||p.mood,'Tâm trạng'],
+   [p.best_streak,'Streak dài nhất'],[p.evo_score,'Điểm tiến hoá'],[(p.stage+1)+'/4','Giai đoạn']].forEach(function(x){
+    var c=el('div');c.appendChild(el('b','',String(x[0])));c.appendChild(el('span','',x[1]));g.appendChild(c);});
+  card.appendChild(g);
+  card.appendChild(el('div','acc',p.accessory_name?('Đang đeo: '+p.accessory_name):'Chưa đeo phụ kiện'));
+  var cp=el('button','b2','Sao chép link');
+  cp.onclick=function(){if(navigator.clipboard){navigator.clipboard.writeText(location.href).then(function(){cp.textContent='Đã sao chép ✓';},function(){cp.textContent='Hãy copy từ thanh địa chỉ';});}else{cp.textContent='Hãy copy từ thanh địa chỉ';}};
+  card.appendChild(cp);
+  var a=el('a','btn b1','Chơi PawHabit');a.href='/';card.appendChild(a);
+  var img=new Image();
+  img.onload=function(){
+    var z=ZOOM[p.stage]||2,n=Math.max(1,Math.round(img.naturalWidth/100)),y=-20*z;
+    dog.style.width=(100*z)+'px';dog.style.height=(60*z)+'px';
+    dog.style.backgroundImage='url('+img.src+')';
+    dog.style.backgroundSize=(n*100*z)+'px '+(100*z)+'px';
+    dog.style.backgroundPosition='0px '+y+'px';
+    var st=document.createElement('style');
+    st.textContent='@keyframes pl{from{background-position:0px '+y+'px}to{background-position:'+(-n*100*z)+'px '+y+'px}}';
+    document.head.appendChild(st);
+    dog.style.animation='pl '+(n*0.12)+'s steps('+n+') infinite';
+  };
+  img.src='/pet-assets/dogs/'+encodeURIComponent(p.breed)+'/idle.png';
+}
+})();
+</script></body></html>"""
+
+
+@app.get("/p/{username}", response_class=HTMLResponse)
+def public_page(username: str):
+    return HTMLResponse(PUBLIC_HTML)
+
+
+# ------------------------------------------------------------- static: ảnh thú cho trang công khai + bản build web
+if ASSET_DIR.exists():
+    app.mount("/pet-assets", StaticFiles(directory=str(ASSET_DIR)), name="pet-assets")
 if WEB_DIR.exists():
     app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")

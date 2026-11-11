@@ -26,6 +26,7 @@ STAT_COL = {"hunger": (230, 140, 60), "happy": (240, 100, 150), "energy": (90, 1
 STAT_VN = {"hunger": "No bụng", "happy": "Vui vẻ", "energy": "Năng lượng", "clean": "Sạch sẽ"}
 MOOD_VN = {"happy": "Rất vui", "normal": "Bình thường", "sad": "Buồn", "sick": "Ốm yếu"}
 KIND_ORDER = {"feed": ["bone", "steak", "treat"], "play": ["ball", "frisbee"], "bathe": ["soap"], "rest": ["bed"]}
+TX_VN = {"starter": "Quà khởi đầu", "habit": "Làm thói quen", "quest": "Nhiệm vụ", "buy": "Mua vật phẩm"}
 ACC_NAMES = {"bandana": "Khăn đỏ", "glasses": "Kính râm", "bow": "Nơ hồng", "crown": "Vương miện"}
 
 TABS = [("home", "Nhà"), ("habits", "Thói quen"), ("quests", "Nhiệm vụ"), ("shop", "Cửa hàng"),
@@ -207,6 +208,7 @@ class App:
         self.pick = "golden"
         self.new_kind, self.new_hour = "daily", None
         self.rank_by, self.rank_rows, self.stats, self.admin_rows = "xp", [], None, []
+        self.admin_view, self.tx_rows = "users", []
         self.reminded = set()
         self.last_sync = time.time()
         self.sync_at = time.time()
@@ -426,6 +428,7 @@ class App:
         self.save_token("")
         self.st, self.scene, self.fields, self.focus = None, "auth", {}, "user"
         self.mode, self.tab, self.stats, self.rank_rows, self.admin_rows = "login", "home", None, [], []
+        self.admin_view, self.tx_rows = "users", []
         self.reminded.clear()
         self.click = None
         if not silent:
@@ -531,7 +534,6 @@ class App:
         sw = "Đã có tài khoản? Đăng nhập" if reg else "Chưa có tài khoản? Đăng ký"
         if self.button((p.x + 30, p.y + 228, 320, 38), sw, BLUE, font=self.f_m):
             self.mode = "login" if reg else "register"
-        self.txt(self.net.base, (W - 8, H - 6), self.f_s, WHITE, "bottomright")
 
     def submit_auth(self, u, pw, reg):
         def ok(d):
@@ -645,7 +647,7 @@ class App:
                 elif k == "stats":
                     self.net.request("GET", "/stats", cb=lambda d: setattr(self, "stats", d))
                 elif k == "admin":
-                    self.load_admin()
+                    self.load_admin() if self.admin_view == "users" else self.load_tx()
                 elif k == "shop" and not self.shop:
                     self.net.request("GET", "/shop", cb=lambda r_: setattr(self, "shop", r_["items"]))
 
@@ -939,19 +941,40 @@ class App:
                 self.call("POST", "/pet", {"name": nm.strip(), "breed": p["breed"]}, ok=lambda d: self.toast("Đã đổi tên"))
                 self.fields["rename"] = ""
         if self.button((r.x + 16, r.y + 142, 328, 38), "Bật thông báo trình duyệt", BLUE):
-            self.net.notify("Đã bật nhắc nhở thói quen!")
-            self.toast("Nếu trình duyệt hỏi, hãy bấm Cho phép", "info")
+            res = self.net.notify("Đã bật nhắc nhở thói quen!")
+            msgs = {"sent": ("Đã gửi thông báo thử – xem góc màn hình / Trung tâm thông báo", "ok"),
+                    "asked": ("Hãy bấm Cho phép ở hộp thoại của trình duyệt", "info"),
+                    "denied": ("Trình duyệt đang CHẶN thông báo: bấm biểu tượng ổ khoá cạnh địa chỉ > Thông báo > Cho phép", "err"),
+                    "unsupported": ("Trình duyệt không hỗ trợ thông báo", "err"),
+                    "desktop": ("Bản desktop chỉ có nhắc nhở trong game", "info")}
+            self.toast(*msgs.get(res, ("Thông báo: " + res, "err")))
         if self.button((r.x + 16, r.y + 194, 328, 38), "Đăng xuất", RED):
             self.logout()
-        self.txt("Mẹo: nhấp vào thú cưng ở màn hình Nhà để vuốt ve. Hoàn thành thói quen mỗi ngày để giữ streak!", (36, TOP + 330), self.f_s, INK, "topleft", 720)
+        pub = "%s/p/%s" % (self.net.base, u["username"])
+        if self.button((30, TOP + 330, 480, 50), "Xem trang trưng bày thú cưng công khai", GREEN, font=self.f_mb):
+            self.net.open_url(pub)
+        if self.button((522, TOP + 330, 248, 50), "Sao chép link chia sẻ", BLUE, font=self.f_mb):
+            res = self.net.copy(pub)
+            self.toast("Đã thử sao chép – nếu không được, bấm nút xanh lá rồi copy từ thanh địa chỉ" if res == "ok"
+                       else "Link: " + pub, "ok" if res == "ok" else "info")
+        self.txt("Mẹo: nhấp vào thú cưng ở màn hình Nhà để vuốt ve. Hoàn thành thói quen mỗi ngày để giữ streak!", (36, TOP + 400), self.f_s, INK, "topleft", 720)
 
     # ---------------- tab: Quản trị
     def load_admin(self):
         self.net.request("GET", "/admin/users", cb=lambda d: setattr(self, "admin_rows", d["users"]))
 
+    def load_tx(self):
+        self.net.request("GET", "/admin/transactions?limit=200", cb=lambda d: setattr(self, "tx_rows", d["transactions"]))
+
     def t_admin(self, dt_):
-        self.txt("Quản lý người dùng", (36, TOP + 20), self.f_l)
-        self.txt("%d tài khoản" % len(self.admin_rows), (W - 36, TOP + 26), self.f_m, GREY, "topright")
+        for i, (k, lab) in enumerate((("users", "Người dùng"), ("tx", "Giao dịch coin"))):
+            if self.button((W - 300 + i * 140, TOP + 18, 132, 32), lab, ORANGE if self.admin_view == k else GREY, font=self.f_s):
+                self.admin_view = k
+                self.scr.pop("list", None)
+                self.load_admin() if k == "users" else self.load_tx()
+        if self.admin_view == "tx":
+            return self.admin_tx()
+        self.txt("Quản lý người dùng (%d)" % len(self.admin_rows), (36, TOP + 20), self.f_l)
         area = pygame.Rect(30, TOP + 62, W - 60, H - TOP - NAV - 86)
         y0 = self.scroll_begin("list", area, len(self.admin_rows) * 52)
         me = self.st["user"]["id"]
@@ -980,6 +1003,25 @@ class App:
                     self.confirm = (None, 0)
                 else:
                     self.confirm = (key, time.time() + 3)
+        self.scroll_end()
+
+    def admin_tx(self):
+        self.txt("Lịch sử giao dịch coin (%d gần nhất)" % len(self.tx_rows), (36, TOP + 20), self.f_l, INK, "topleft", 460)
+        area = pygame.Rect(30, TOP + 62, W - 60, H - TOP - NAV - 86)
+        if not self.tx_rows:
+            self.txt("Chưa có giao dịch nào", (W // 2, TOP + 120), self.f_m, GREY, "center")
+        y0 = self.scroll_begin("list", area, len(self.tx_rows) * 44)
+        tz = dt.timezone(dt.timedelta(hours=7))
+        for i, t in enumerate(self.tx_rows):
+            r = pygame.Rect(area.x, y0 + i * 44, area.w - 4, 40)
+            self.panel(r, CARD, 8)
+            when = dt.datetime.fromtimestamp(t["ts"], tz).strftime("%d/%m %H:%M")
+            self.txt(when, (r.x + 10, r.centery), self.f_s, GREY, "midleft")
+            self.txt(t["user"], (r.x + 90, r.centery), self.f_mb, INK, "midleft", 130)
+            what = TX_VN.get(t["reason"], t["reason"]) + (": " + t["ref"] if t["ref"] else "")
+            self.txt(what, (r.x + 230, r.centery), self.f_s, INK, "midleft", 290)
+            self.txt("%+d" % t["delta"], (r.right - 110, r.centery), self.f_mb, GREEN if t["delta"] > 0 else RED, "midright")
+            self.txt("dư %d" % t["balance"], (r.right - 14, r.centery), self.f_s, GREY, "midright")
         self.scroll_end()
 
 

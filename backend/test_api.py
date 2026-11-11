@@ -1,5 +1,7 @@
 import os, tempfile
 os.environ["DATABASE_URL"] = "sqlite:///" + tempfile.mktemp(suffix=".db")
+os.environ["ADMIN_PASS"] = "admin123"
+os.environ["WEB_DIR"] = "/nonexistent"
 from fastapi.testclient import TestClient
 from backend import app as A, rules as R
 R.COMPLETE_COOLDOWN = 0
@@ -46,5 +48,31 @@ def test_flow():
         c.post(f"/api/admin/users/{uid}/ban", headers=HA)
         assert c.get("/api/me", headers=H).status_code == 403
         assert c.delete(f"/api/admin/users/{uid}", headers=HA).status_code == 200
+        # ---- lịch sử giao dịch + trang công khai (đăng ký lại alice vì đã bị xoá)
+        r = c.post("/api/auth/register", json={"username": "zoe", "password": "secret1"})
+        HZ = {"Authorization": "Bearer " + r.json()["token"]}
+        c.post("/api/pet", headers=HZ, json={"name": "<b>Kiki</b>", "breed": "akita"})
+        hid = c.post("/api/habits", headers=HZ, json={"title": "Chay bo"}).json()["state"]["habits"][0]["id"]
+        c.post(f"/api/habits/{hid}/complete", headers=HZ)
+        c.post("/api/shop/buy", headers=HZ, json={"item_id": "steak"})
+        mine = c.get("/api/transactions", headers=HZ).json()["transactions"]
+        assert [(t["reason"], t["delta"], t["balance"]) for t in mine] == [("buy", -35, 7), ("habit", 12, 42), ("starter", 30, 30)], mine
+        assert c.get("/api/admin/transactions", headers=HZ).status_code == 403
+        allt = c.get("/api/admin/transactions", headers=HA).json()["transactions"]
+        assert len(allt) >= 3 and all(t["user"] for t in allt)
+        zid = [u for u in c.get("/api/admin/users", headers=HA).json()["users"] if u["username"] == "zoe"][0]["id"]
+        only = c.get(f"/api/admin/transactions?user_id={zid}", headers=HA).json()["transactions"]
+        assert {t["user"] for t in only} == {"zoe"}
+        # trang công khai: không cần token, không lộ coin
+        pub = c.get("/api/public/pet/ZOE")
+        assert pub.status_code == 200 and "coins" not in str(pub.json()), pub.text
+        assert pub.json()["pet"]["name"] == "<b>Kiki</b>" and pub.json()["pet"]["streak"] == 1
+        assert c.get("/api/public/pet/nobody").status_code == 404
+        page = c.get("/p/zoe"); assert page.status_code == 200 and "PawHabit" in page.text
+        assert c.get("/pet-assets/dogs/akita/idle.png").status_code == 200
+        c.post(f"/api/admin/users/{zid}/ban", headers=HA)
+        assert c.get("/api/public/pet/zoe").status_code == 404      # user bị khoá thì không hiển thị
+        assert c.delete(f"/api/admin/users/{zid}", headers=HA).status_code == 200
+        assert not [t for t in c.get("/api/admin/transactions", headers=HA).json()["transactions"] if t["user"] == "zoe"]
         print("ALL OK")
 test_flow()
