@@ -27,8 +27,12 @@ except ImportError:
     pass
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./pawhabit.db")
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+if DATABASE_URL and DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgresql://",
+        "postgresql+psycopg2://",
+        1
+    )
 SECRET_KEY = os.getenv("SECRET_KEY") or secrets.token_hex(32)
 ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASS = os.getenv("ADMIN_PASS")  # bắt buộc đặt trong môi trường/.env, không có mặc định
