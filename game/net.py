@@ -59,7 +59,7 @@ class Net:
             elif host in ("localhost", "127.0.0.1"):      # 2) chạy thử trên máy
                 self.base = LOCAL_API
             else:                                         # 3) đã deploy: API cùng domain với trang game
-                self.base = str(platform.window.eval("location.origin"))
+                self.base = "https://petgame-hyk7.onrender.com"
         else:
             self.base = os.getenv("PAWHABIT_URL", LOCAL_API)
 
