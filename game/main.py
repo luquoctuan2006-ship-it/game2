@@ -13,6 +13,7 @@ import time
 import pygame
 
 import net as netmod
+from ui import CozyUI
 from sprites import BREED_NAMES, BREEDS, STAGE_SCALE, Sprites
 
 W, H = 800, 600
@@ -23,6 +24,8 @@ INK, CREAM, CARD, LINE = (62, 44, 36), (252, 246, 232), (255, 252, 244), (226, 2
 ORANGE, GREEN, RED, BLUE = (238, 142, 50), (98, 178, 84), (220, 80, 70), (80, 150, 220)
 GOLD, GREY, DARK, WHITE, PINK = (246, 196, 50), (170, 160, 150), (52, 36, 30), (255, 255, 255), (236, 120, 160)
 STAT_COL = {"hunger": (230, 140, 60), "happy": (240, 100, 150), "energy": (90, 160, 230), "clean": (80, 190, 190)}
+MUTED = (112, 84, 70)  # chữ phụ trên nền giấy
+STAT_ICON = {"hunger": "apple", "happy": "heart", "energy": "pot_green", "clean": "pot_blue"}
 STAT_VN = {"hunger": "No bụng", "happy": "Vui vẻ", "energy": "Năng lượng", "clean": "Sạch sẽ"}
 MOOD_VN = {"happy": "Rất vui", "normal": "Bình thường", "sad": "Buồn", "sick": "Ốm yếu"}
 KIND_ORDER = {"feed": ["bone", "steak", "treat"], "play": ["ball", "frisbee"], "bathe": ["soap"], "rest": ["bed"]}
@@ -61,54 +64,66 @@ def draw_acc(s, kind, hx, hy, k, flip=False):
         pygame.draw.polygon(s, (150, 30, 30), P(tri), 1)
 
 
+ICONS = {}  # nạp từ assets/ui/icons (cắt từ coins-chests-etc.aseprite)
+_ICON_CACHE = {}
+
+
+def blit_icon(s, name, cx, cy, size=None):
+    """vẽ icon pixel-art ở giữa (cx, cy); size = chiều cao mong muốn, phóng theo bội số nguyên"""
+    img = ICONS.get(name)
+    if img is None:
+        return
+    k = max(1, int(round(size / max(img.get_size())))) if size else 1
+    key = (name, k)
+    if key not in _ICON_CACHE:
+        _ICON_CACHE[key] = img if k == 1 else pygame.transform.scale(img, (img.get_width() * k, img.get_height() * k))
+    im = _ICON_CACHE[key]
+    s.blit(im, im.get_rect(center=(int(cx), int(cy))))
+
+
 def draw_face(s, cx, cy, r, mood):
-    col = {"happy": (255, 214, 80), "normal": (255, 226, 130), "sad": (180, 200, 230), "sick": (170, 215, 140)}[mood]
-    pygame.draw.circle(s, col, (cx, cy), r)
-    pygame.draw.circle(s, INK, (cx, cy), r, 2)
-    ex = r * 0.38
-    for sx in (-1, 1):
-        pygame.draw.circle(s, INK, (int(cx + sx * ex), int(cy - r * 0.2)), max(2, r // 7))
-    box = pygame.Rect(cx - r * 0.5, cy - r * 0.05, r, r * 0.8)
-    if mood == "happy":
-        pygame.draw.arc(s, INK, box, math.pi + 0.3, 2 * math.pi - 0.3, 2)
-    elif mood == "normal":
-        pygame.draw.line(s, INK, (cx - r * 0.35, cy + r * 0.4), (cx + r * 0.35, cy + r * 0.4), 2)
-    else:
-        box.move_ip(0, r * 0.35)
-        pygame.draw.arc(s, INK, box, 0.3, math.pi - 0.3, 2)
+    blit_icon(s, {"happy": "face_smile", "normal": "face_smile2", "sad": "face_q", "sick": "face_bang"}[mood], cx, cy, r * 2)
 
 
 def draw_heart(s, x, y, size, col=PINK):
-    r = size // 2
-    pygame.draw.circle(s, col, (x - r // 2, y), r // 2 + 1)
-    pygame.draw.circle(s, col, (x + r // 2, y), r // 2 + 1)
-    pygame.draw.polygon(s, col, [(x - r - 1, y + 1), (x + r + 1, y + 1), (x, y + r + 3)])
+    blit_icon(s, "heart", x, y + size // 4, size)
+
+
+COIN = {"spin": 0.0}  # thời điểm kết thúc hiệu ứng xoay (khi vừa nhận xu)
+
+
+def coin_frame():
+    t = time.time()
+    if t < COIN["spin"]:  # vừa nhận xu: xoay vòng
+        return "spin_%d" % (int(t * 12) % 6)
+    ph = t % 2.0  # nghỉ 1.4s rồi ánh sáng quét qua 6 frame
+    return "coin_0" if ph < 1.4 else "coin_%d" % min(6, 1 + int((ph - 1.4) / 0.1))
 
 
 def draw_coin(s, x, y, r=9):
-    pygame.draw.circle(s, GOLD, (x, y), r)
-    pygame.draw.circle(s, (200, 140, 20), (x, y), r, 2)
-    pygame.draw.circle(s, (255, 230, 120), (x - 2, y - 2), max(1, r // 4))
+    blit_icon(s, coin_frame(), x, y, r * 2)
 
 
 def draw_flame(s, x, y, h=16, col=ORANGE):
-    pts = [(x, y - h), (x + h * 0.45, y - h * 0.35), (x + h * 0.3, y), (x - h * 0.3, y), (x - h * 0.45, y - h * 0.35)]
-    pygame.draw.polygon(s, col, pts)
-    pygame.draw.polygon(s, GOLD, [(x, y - h * 0.5), (x + h * 0.2, y - h * 0.1), (x - h * 0.2, y - h * 0.1)])
+    """icon streak (ngọn lửa pixel); (x, y) là đáy"""
+    blit_icon(s, "flame", x, y - h // 2, h)
 
 
 # ------------------------------------------------------------------ nhân vật thú
+Y_FAR, Y_NEAR = 405, 482  # vùng chân chó được đi trên đồng cỏ (xa -> gần)
+
+
 class Actor:
     def __init__(self):
-        self.x, self.dir, self.anim = 400.0, 1, "idle"
+        self.x, self.y, self.target = 400.0, 450.0, None
+        self.dir, self.anim = 1, "idle"
         self.t, self.state_t, self.queue = 0.0, 1.5, []
         self.hearts = []
         self.rect = pygame.Rect(0, 0, 0, 0)
 
     def set(self, anim, dur):
         self.anim, self.state_t, self.t = anim, dur, 0.0
-        if anim in ("walk", "run") and random.random() < 0.5:
-            self.dir *= -1
+        self.target = None  # đi/chạy sẽ tự chọn điểm đến mới
 
     def play(self, seq):
         self.queue = list(seq)
@@ -137,12 +152,21 @@ class Actor:
         self.t += dt_
         self.state_t -= dt_
         sp = {"walk": 14, "run": 38}.get(self.anim, 0) * scale
-        self.x += self.dir * sp * dt_
-        lo, hi = 110 + width / 2, 690 - width / 2
-        if self.x < lo:
-            self.x, self.dir = lo, 1
-        elif self.x > hi:
-            self.x, self.dir = hi, -1
+        lo, hi = 8 + width / 2, W - 8 - width / 2
+        if sp:  # đi thoải mái khắp đồng cỏ: chọn điểm ngẫu nhiên rồi đi tới đó
+            if self.target is None:
+                self.target = (random.uniform(lo, hi), random.uniform(Y_FAR, Y_NEAR))
+            dx, dy = self.target[0] - self.x, self.target[1] - self.y
+            dist = math.hypot(dx, dy)
+            if dist < 5:
+                self.target = None
+            else:
+                self.x += dx / dist * sp * dt_
+                self.y += dy / dist * sp * 0.6 * dt_  # đi dọc chiều sâu chậm hơn cho đúng phối cảnh
+                if abs(dx) > 3:
+                    self.dir = 1 if dx > 0 else -1
+        self.x = max(lo, min(hi, self.x))
+        self.y = max(Y_FAR, min(Y_NEAR, self.y))
         if self.state_t <= 0:
             if self.queue:
                 a, d = self.queue.pop(0)
@@ -154,7 +178,8 @@ class Actor:
             h[2] += dt_
         self.hearts = [h for h in self.hearts if h[2] < 1.4]
 
-    def draw(self, s, sheet, p, ground, scale=None):
+    def draw(self, s, sheet, p, ground=None, scale=None):
+        ground = self.y if ground is None else ground
         stage = p.get("stage", 0)
         scale = scale or STAGE_SCALE[stage]
         frames = sheet.frames(self.anim, scale, self.dir < 0)
@@ -193,6 +218,8 @@ class App:
         self.f_l = pygame.font.Font(fp("DejaVuSans-Bold.ttf"), 22)
         self.f_xl = pygame.font.Font(fp("DejaVuSans-Bold.ttf"), 40)
         self.sp = Sprites()
+        self.ui = CozyUI()
+        ICONS.update(self.ui.icons)
         self.net = netmod.Net()
         self.cache = {}
         self.scene, self.tab = "boot", "home"
@@ -277,30 +304,50 @@ class App:
 
     def panel(self, rect, col=CARD, r=14, border=LINE, alpha=None):
         rect = pygame.Rect(rect)
-        if alpha is not None:
-            sf = pygame.Surface(rect.size, pygame.SRCALPHA)
-            pygame.draw.rect(sf, (*col, alpha), sf.get_rect(), border_radius=r)
-            self.screen.blit(sf, rect)
-        else:
+        surf = self.ui.panel(rect.w, rect.h, col)
+        if surf is None:  # quá nhỏ để 9-slice
             pygame.draw.rect(self.screen, col, rect, border_radius=r)
-        if border:
-            pygame.draw.rect(self.screen, border, rect, 2, border_radius=r)
+            return
+        surf.set_alpha(255 if alpha is None else alpha)
+        self.screen.blit(surf, rect)
+        if border not in (None, LINE, WHITE):  # viền nhấn (thẻ đang chọn...)
+            pygame.draw.rect(self.screen, border, rect.inflate(-4, -4), 2, border_radius=3)
 
     def hit(self, rect):
         return bool(self.click and rect.collidepoint(self.click) and (not self.clip or self.clip.collidepoint(self.click)))
+
+    GLYPH_BTN = {"−": "minus", "+": "plus"}
+    GLYPH_LBL = {"Hoàn thành": "check", "Xoá": "x", "Xoá?": "x"}
 
     def button(self, rect, label, col=ORANGE, enabled=True, font=None, badge=False):
         rect = pygame.Rect(rect)
         mp = pygame.mouse.get_pos()
         hov = enabled and rect.collidepoint(mp) and (not self.clip or self.clip.collidepoint(mp))
-        c = col if enabled else (200, 192, 182)
-        if hov:
-            c = tuple(min(255, v + 18) for v in c)
-        pygame.draw.rect(self.screen, (c[0] * 3 // 4, c[1] * 3 // 4, c[2] * 3 // 4), rect.move(0, 3), border_radius=10)
-        pygame.draw.rect(self.screen, c, rect, border_radius=10)
-        self.txt(label, rect.center, font or self.f_mb, WHITE if enabled else (250, 246, 240), "center", rect.w - 8)
+        down = bool(hov and pygame.mouse.get_pressed()[0])
+        theme = self.ui.theme_for(col) if enabled else "cream"
+        only = self.GLYPH_BTN.get(label)
+        if only and theme == "cream":
+            theme = "brown"
+        self.screen.blit(self.ui.button(rect.w, rect.h, theme, down, hov and not down), rect)
+        tc = self.ui.text_col(theme) if enabled else (150, 135, 120)
+        c = (rect.centerx, rect.centery - 1 + (1 if down else 0))
+        if only:
+            g = self.ui.glyph(theme, only)
+            self.screen.blit(g, g.get_rect(center=c))
+        else:
+            gl = self.GLYPH_LBL.get(label) if enabled else None
+            font = font or self.f_mb
+            if gl:
+                g = self.ui.glyph(theme, gl)
+                tw = min(font.size(label)[0], rect.w - 30)
+                x0 = rect.centerx - (g.get_width() + 4 + tw) // 2
+                self.screen.blit(g, (x0, c[1] - g.get_height() // 2))
+                self.txt(label, (x0 + g.get_width() + 4, c[1]), font, tc, "midleft", tw)
+            else:
+                self.txt(label, c, font, tc, "center", rect.w - 12)
         if badge:
             pygame.draw.circle(self.screen, RED, (rect.right - 8, rect.top + 8), 6)
+            pygame.draw.circle(self.screen, WHITE, (rect.right - 8, rect.top + 8), 6, 1)
         if enabled and self.hit(rect):
             self.click = None
             return True
@@ -314,11 +361,10 @@ class App:
             self.focus = fid
             self.click = None
         foc = self.focus == fid
-        pygame.draw.rect(self.screen, WHITE, rect, border_radius=8)
-        pygame.draw.rect(self.screen, ORANGE if foc else LINE, rect, 2, border_radius=8)
+        self.screen.blit(self.ui.field(rect.w, rect.h, foc), rect)
         shown = "•" * len(val) if password else val
         if not val and not foc:
-            self.txt(hint, (rect.x + 10, rect.centery), self.f_m, GREY, "midleft", rect.w - 16)
+            self.txt(hint, (rect.x + 10, rect.centery), self.f_m, MUTED, "midleft", rect.w - 16)
         else:
             surf = self.f_m.render(shown, True, INK)
             clip = self.screen.get_clip()
@@ -343,12 +389,16 @@ class App:
             self.fields[fid] = val
         return val
 
-    def bar(self, rect, v, vmax, col, bg=(230, 220, 205)):
+    def bar(self, rect, v, vmax, col, bg=(231, 211, 203)):
         rect = pygame.Rect(rect)
-        pygame.draw.rect(self.screen, bg, rect, border_radius=rect.h // 2)
-        w = int(rect.w * max(0, min(1, v / vmax if vmax else 0)))
+        pygame.draw.rect(self.screen, bg, rect)
+        w = int((rect.w - 2) * max(0, min(1, v / vmax if vmax else 0)))
         if w > 0:
-            pygame.draw.rect(self.screen, col, (rect.x, rect.y, max(w, rect.h), rect.h), border_radius=rect.h // 2)
+            inner = pygame.Rect(rect.x + 1, rect.y + 1, w, rect.h - 2)
+            pygame.draw.rect(self.screen, col, inner)
+            if inner.h >= 4:
+                pygame.draw.line(self.screen, tuple(min(255, c + 60) for c in col), inner.topleft, (inner.right - 1, inner.y))
+        pygame.draw.rect(self.screen, (99, 66, 67), rect, 1)
 
     def toast(self, msg, kind="ok"):
         self.toasts.append([msg, time.time() + 3.2, {"ok": GREEN, "err": RED, "info": BLUE, "gold": ORANGE}[kind]])
@@ -472,15 +522,19 @@ class App:
     last_order = []
     enter = False
 
+    TOAST_ICON = {GREEN: ("brown", "check"), RED: ("mauve", "x"), BLUE: ("peach", "help"), ORANGE: ("peach", "coin")}
+
     def draw_toasts(self):
         now = time.time()
         self.toasts = [t for t in self.toasts if t[1] > now]
         for i, (msg, _u, col) in enumerate(self.toasts):
-            w = min(560, self.f_mb.size(msg)[0] + 40)
-            r = pygame.Rect(0, 0, w, 34)
-            r.midtop = (W // 2, H - NAV - 46 - i * 40 if self.scene == "main" else 12 + i * 40)
-            self.panel(r, col, 10, WHITE)
-            self.txt(msg, r.center, self.f_mb, WHITE, "center", w - 20)
+            w = min(560, self.f_mb.size(msg)[0] + 66)
+            r = pygame.Rect(0, 0, w, 36)
+            r.midtop = (W // 2, H - NAV - 46 - i * 42 if self.scene == "main" else 12 + i * 42)
+            self.panel(r, CARD, 10, None)
+            th, gl = self.TOAST_ICON.get(col, ("brown", "check"))
+            self.screen.blit(self.ui.icon(th, gl), (r.x + 12, r.centery - 7))
+            self.txt(msg, (r.x + 34, r.centery), self.f_mb, INK, "midleft", w - 46)
 
     def draw_overlay(self):
         until, msg = self.overlay
@@ -615,20 +669,23 @@ class App:
 
     def topbar(self):
         p = self.st["pet"]
-        pygame.draw.rect(self.screen, DARK, (0, 0, W, TOP))
+        self.screen.blit(self.ui.button(W, TOP, "brown"), (0, 0))
         self.txt(p["name"], (14, 7), self.f_mb, WHITE)
-        self.txt("Lv %d · %s" % (p["level"], p["stage_name"]), (14, 29), self.f_s, (230, 210, 180))
-        self.bar((200, 14, 220, 12), p["xp_cur"], p["xp_need"], GREEN, (90, 70, 60))
-        self.txt("XP %d/%d" % (p["xp_cur"], p["xp_need"]), (310, 38), self.f_s, (230, 210, 180), "center")
-        draw_flame(self.screen, 470, 32, 20)
-        self.txt("%d ngày" % p["streak"], (484, 27), self.f_mb, WHITE)
-        draw_coin(self.screen, 590, 27, 11)
-        self.txt(str(p["coins"]), (607, 27), self.f_mb, GOLD, "midleft")
+        self.txt("Lv %d · %s" % (p["level"], p["stage_name"]), (14, 29), self.f_s, WHITE)
+        self.bar((200, 14, 220, 12), p["xp_cur"], p["xp_need"], GREEN, (99, 66, 67))
+        self.txt("XP %d/%d" % (p["xp_cur"], p["xp_need"]), (310, 38), self.f_s, WHITE, "center")
+        draw_flame(self.screen, 478, 44, 32)
+        self.txt("%d ngày" % p["streak"], (498, 27), self.f_mb, WHITE)
+        if p["coins"] > getattr(self, "_coins_seen", p["coins"]):
+            COIN["spin"] = time.time() + 0.9
+        self._coins_seen = p["coins"]
+        draw_coin(self.screen, 592, 27, 14)
+        self.txt(str(p["coins"]), (612, 27), self.f_mb, GOLD, "midleft")
         draw_face(self.screen, 690, 27, 14, p["mood"])
         self.txt(MOOD_VN[p["mood"]], (710, 27), self.f_s, WHITE, "midleft")
 
     def navbar(self):
-        pygame.draw.rect(self.screen, DARK, (0, H - NAV, W, NAV))
+        self.screen.blit(self.ui.button(W, NAV, "brown"), (0, H - NAV))
         tabs = list(TABS)
         if self.st["user"]["role"] == "admin":
             tabs.append(("admin", "Quản trị"))
@@ -658,14 +715,14 @@ class App:
         scale = STAGE_SCALE[p["stage"]]
         a = self.actor
         a.update(dt_, p, scale, sheet.size(scale)[0])
-        ground = 440
-        a.draw(self.screen, sheet, p, ground)
+        a.draw(self.screen, sheet, p)
         if self.hit(a.rect.inflate(20, 20)):
             a.cheer()
             self.click = None
-        # nameplate
+        # nameplate: đi theo chú chó, nằm trên đầu
         np_ = pygame.Rect(0, 0, 230, 34)
-        np_.midtop = (W // 2, ground + 14)
+        np_.midbottom = (max(125, min(W - 125, a.rect.centerx)), a.rect.top - 4)
+        np_.top = max(TOP + 4, np_.top)
         self.panel(np_, CARD, 10, LINE, 210)
         self.txt("%s · %s" % (p["name"], p["stage_name"]), (np_.centerx, np_.centery), self.f_mb, INK, "center", 214)
         # chỉ số
@@ -673,16 +730,17 @@ class App:
         self.panel(pn, CARD, 12, LINE, 225)
         for i, k in enumerate(("hunger", "happy", "energy", "clean")):
             y = pn.y + 10 + i * 30
-            self.txt(STAT_VN[k], (pn.x + 10, y), self.f_s)
+            blit_icon(self.screen, STAT_ICON[k], pn.x + 17, y + 12)
+            self.txt(STAT_VN[k], (pn.x + 34, y), self.f_s)
             self.txt(str(int(p[k])), (pn.right - 10, y), self.f_s, INK, "topright")
-            self.bar((pn.x + 10, y + 17, 176, 8), p[k], 100, STAT_COL[k] if p[k] > 25 else RED)
+            self.bar((pn.x + 34, y + 17, 152, 8), p[k], 100, STAT_COL[k] if p[k] > 25 else RED)
         # tiến hoá
         ev = pygame.Rect(W - 210, TOP + 8, 196, 62)
         self.panel(ev, CARD, 12, LINE, 225)
         nxt = p["next_stage_at"]
         self.txt("Tiến hoá: %d%s" % (p["evo_score"], "/%d" % nxt if nxt else " (tối đa)"), (ev.x + 10, ev.y + 8), self.f_s)
         self.bar((ev.x + 10, ev.y + 28, 176, 8), p["evo_score"], nxt or 1, GOLD)
-        self.txt("Streak + chăm sóc", (ev.x + 10, ev.y + 40), self.f_s, GREY, "topleft", 180)
+        self.txt("Streak + chăm sóc", (ev.x + 10, ev.y + 40), self.f_s, MUTED, "topleft", 180)
         # nhắc nhở
         pend = [h for h in self.st["habits"] if not h["done"]]
         if pend:
@@ -713,23 +771,23 @@ class App:
         done = sum(1 for h in hs if h["done"])
         self.txt("Hôm nay: %d/%d" % (done, len(hs)), (W - 36, TOP + 24), self.f_mb, GREEN, "topright")
         area = pygame.Rect(30, TOP + 56, W - 60, 268)
-        y0 = self.scroll_begin("list", area, max(len(hs) * 52, area.h))
+        y0 = self.scroll_begin("list", area, max(len(hs) * 56, area.h))
         if not hs:
-            self.txt("Chưa có thói quen nào. Hãy thêm bên dưới!", (area.centerx, area.y + 40), self.f_m, GREY, "center")
+            self.txt("Chưa có thói quen nào. Hãy thêm bên dưới!", (area.centerx, area.y + 40), self.f_m, MUTED, "center")
         for i, h in enumerate(hs):
-            r = pygame.Rect(area.x, y0 + i * 52, area.w - 4, 46)
+            r = pygame.Rect(area.x, y0 + i * 56, area.w - 4, 50)
             self.panel(r, (232, 246, 226) if h["done"] else CARD, 10)
-            self.txt(h["title"], (r.x + 14, r.y + 6), self.f_mb, INK, "topleft", 360)
+            self.txt(h["title"], (r.x + 14, r.y + 5), self.f_mb, INK, "topleft", 360)
             tag = "Hằng ngày" if h["kind"] == "daily" else "Hằng tuần (x2 thưởng)"
             rm = "" if h["reminder_hour"] is None else "  ·  nhắc lúc %02d:00" % h["reminder_hour"]
-            self.txt(tag + rm, (r.x + 14, r.y + 26), self.f_s, GREY)
+            self.txt(tag + rm, (r.x + 14, r.y + 25), self.f_s, MUTED)
             if h["done"]:
                 self.txt("Đã xong ✓", (r.right - 130, r.centery), self.f_mb, GREEN, "center")
-            elif self.button((r.right - 190, r.y + 7, 110, 32), "Hoàn thành", GREEN, font=self.f_m):
+            elif self.button((r.right - 190, r.y + 9, 110, 32), "Hoàn thành", GREEN, font=self.f_m):
                 self.call("POST", "/habits/%d/complete" % h["id"], ok=self.on_complete)
             key = ("del", h["id"])
             armed = self.confirm[0] == key and self.confirm[1] > time.time()
-            if self.button((r.right - 70, r.y + 7, 58, 32), "Xoá?" if armed else "Xoá", RED if armed else GREY, font=self.f_s):
+            if self.button((r.right - 70, r.y + 9, 58, 32), "Xoá?" if armed else "Xoá", RED if armed else GREY, font=self.f_s):
                 if armed:
                     self.call("DELETE", "/habits/%d" % h["id"])
                     self.confirm = (None, 0)
@@ -798,7 +856,7 @@ class App:
         draw_coin(self.screen, W - 120, TOP + 36, 11)
         self.txt(str(p["coins"]), (W - 100, TOP + 36), self.f_mb, ORANGE, "midleft")
         if not self.shop:
-            self.txt("Đang tải…", (W // 2, 300), self.f_m, GREY, "center")
+            self.txt("Đang tải…", (W // 2, 300), self.f_m, MUTED, "center")
         rows = (len(self.shop) + 3) // 4
         area = pygame.Rect(26, TOP + 62, W - 52, H - TOP - NAV - 86)
         y0 = self.scroll_begin("list", area, rows * 146 + 10)
@@ -809,12 +867,12 @@ class App:
             if it["kind"] == "acc":
                 pygame.draw.rect(self.screen, (236, 226, 204), (r.x + 12, r.y + 40, 151, 34), border_radius=8)
                 draw_acc(self.screen, it["id"], r.centerx + (12 if it["id"] == "bandana" else 0), r.y + 58 + (-6 if it["id"] == "bandana" else 0), 1.5)
-                self.txt("Phụ kiện vĩnh viễn", (r.centerx, r.y + 82), self.f_s, GREY, "midtop")
+                self.txt("Phụ kiện vĩnh viễn", (r.centerx, r.y + 82), self.f_s, MUTED, "midtop")
             else:
                 eff = "  ".join("%+d %s" % (v, {"hunger": "No", "happy": "Vui", "energy": "Sức", "clean": "Sạch"}[k]) for k, v in it["eff"].items())
                 for j, ln in enumerate(self.wrap(eff, self.f_s, 150)[:3]):
                     self.txt(ln, (r.centerx, r.y + 46 + j * 17), self.f_s, INK, "midtop")
-                self.txt("Đang có: %d" % inv.get(it["id"], 0), (r.centerx, r.y + 84), self.f_s, GREY, "midtop")
+                self.txt("Đang có: %d" % inv.get(it["id"], 0), (r.centerx, r.y + 84), self.f_s, MUTED, "midtop")
             owned = it["kind"] == "acc" and inv.get(it["id"])
             can = p["coins"] >= it["price"] and not owned
             lab = "Đã sở hữu" if owned else "Mua · %d" % it["price"]
@@ -829,7 +887,7 @@ class App:
         self.txt("Túi đồ", (36, TOP + 20), self.f_l)
         items = [(k, v) for k, v in inv.items() if v > 0]
         if not items or not self.shop:
-            self.txt("Túi trống – hãy ghé Cửa hàng!", (W // 2, 280), self.f_m, GREY, "center")
+            self.txt("Túi trống – hãy ghé Cửa hàng!", (W // 2, 280), self.f_m, MUTED, "center")
         area = pygame.Rect(30, TOP + 62, W - 60, H - TOP - NAV - 86)
         y0 = self.scroll_begin("list", area, len(items) * 56)
         for i, (k, n) in enumerate(items):
@@ -841,12 +899,12 @@ class App:
             self.txt(it["name"], (r.x + 14, r.y + 6), self.f_mb)
             if it["kind"] == "acc":
                 eq = p["accessory"] == k
-                self.txt("Phụ kiện · " + ("đang đeo" if eq else "chưa đeo"), (r.x + 14, r.y + 28), self.f_s, GREEN if eq else GREY)
+                self.txt("Phụ kiện · " + ("đang đeo" if eq else "chưa đeo"), (r.x + 14, r.y + 26), self.f_s, GREEN if eq else MUTED)
                 if self.button((r.right - 130, r.y + 9, 118, 32), "Bỏ ra" if eq else "Đeo", BLUE if not eq else GREY, font=self.f_m):
                     self.call("POST", "/inventory/equip", {"item_id": k})
             else:
                 eff = "  ".join("%+d %s" % (v, {"hunger": "No", "happy": "Vui", "energy": "Sức", "clean": "Sạch"}[s]) for s, v in it["eff"].items())
-                self.txt("x%d   %s" % (n, eff), (r.x + 14, r.y + 28), self.f_s, GREY)
+                self.txt("x%d   %s" % (n, eff), (r.x + 14, r.y + 26), self.f_s, MUTED)
                 seqs = {"food": [("licking1", 1.4), ("licking2", 1.4)], "toy": [("run", 1.8), ("bark", 1.2)],
                         "soap": [("itching", 1.6), ("bark", 1.0)], "bed": [("sleeping", 3.5)]}
                 if self.button((r.right - 130, r.y + 9, 118, 32), "Sử dụng", GREEN, font=self.f_m):
@@ -858,7 +916,7 @@ class App:
         self.txt("Thống kê thói quen", (36, TOP + 20), self.f_l)
         s, p = self.stats, self.st["pet"]
         if not s:
-            self.txt("Đang tải…", (W // 2, 280), self.f_m, GREY, "center")
+            self.txt("Đang tải…", (W // 2, 280), self.f_m, MUTED, "center")
             return
         hs = self.st["habits"]
         cards = [("Tổng đã làm", p["total_done"]), ("Streak hiện tại", p["streak"]), ("Streak dài nhất", p["best_streak"]),
@@ -867,7 +925,7 @@ class App:
             r = pygame.Rect(30 + i * 190, TOP + 62, 178, 62)
             self.panel(r, CARD)
             self.txt(str(val), (r.centerx, r.y + 8), self.f_l, ORANGE, "midtop")
-            self.txt(lab, (r.centerx, r.y + 40), self.f_s, GREY, "midtop")
+            self.txt(lab, (r.centerx, r.y + 40), self.f_s, MUTED, "midtop")
         ch = pygame.Rect(30, TOP + 138, 400, 300)
         self.panel(ch, CARD)
         self.txt("7 ngày gần nhất", (ch.x + 14, ch.y + 8), self.f_mb)
@@ -880,7 +938,7 @@ class App:
             if c:
                 pygame.draw.rect(self.screen, GREEN, (x, base - hgt, 34, hgt), border_radius=6)
             self.txt(str(c), (x + 17, base - hgt - 16 if c else base - 16), self.f_s, INK, "center")
-            self.txt(dt.date.fromisoformat(d).strftime("%d/%m"), (x + 17, base + 6), self.f_s, GREY, "midtop")
+            self.txt(dt.date.fromisoformat(d).strftime("%d/%m"), (x + 17, base + 6), self.f_s, MUTED, "midtop")
         pl = pygame.Rect(444, TOP + 138, 326, 300)
         self.panel(pl, CARD)
         self.txt("Theo từng thói quen (7 ngày)", (pl.x + 14, pl.y + 8), self.f_mb, INK, "topleft", 300)
@@ -914,7 +972,7 @@ class App:
             if r_["accessory"]:
                 draw_acc(self.screen, r_["accessory"], r.x + 56 + fr.head[0], r.centery - fr.surf.get_height() // 2 + 4 + fr.head[1], 0.5)
             self.txt(r_["username"], (r.x + 140, r.y + 7), self.f_mb, INK, "topleft", 200)
-            self.txt("%s · %s · Lv %d" % (r_["pet"], r_["stage_name"], r_["level"]), (r.x + 140, r.y + 30), self.f_s, GREY, "topleft", 300)
+            self.txt("%s · %s · Lv %d" % (r_["pet"], r_["stage_name"], r_["level"]), (r.x + 140, r.y + 30), self.f_s, MUTED, "topleft", 300)
             val = ("%d XP" % r_["xp"]) if self.rank_by == "xp" else ("%d ngày" % r_["streak"])
             self.txt(val, (r.right - 16, r.centery), self.f_l, ORANGE, "midright")
         self.scroll_end()
@@ -930,7 +988,7 @@ class App:
                 ("Giai đoạn", p["stage_name"]), ("Điểm tiến hoá", str(p["evo_score"])), ("Tâm trạng", MOOD_VN[p["mood"]]),
                 ("Streak tốt nhất", "%d ngày" % p["best_streak"])]
         for i, (a, b) in enumerate(rows):
-            self.txt(a, (c.x + 16, c.y + 14 + i * 28), self.f_m, GREY)
+            self.txt(a, (c.x + 16, c.y + 14 + i * 28), self.f_m, MUTED)
             self.txt(b, (c.right - 16, c.y + 14 + i * 28), self.f_mb, INK, "topright", 200)
         r = pygame.Rect(410, TOP + 62, 360, 250)
         self.panel(r, CARD)
@@ -976,18 +1034,18 @@ class App:
             return self.admin_tx()
         self.txt("Quản lý người dùng (%d)" % len(self.admin_rows), (36, TOP + 20), self.f_l)
         area = pygame.Rect(30, TOP + 62, W - 60, H - TOP - NAV - 86)
-        y0 = self.scroll_begin("list", area, len(self.admin_rows) * 52)
+        y0 = self.scroll_begin("list", area, len(self.admin_rows) * 56)
         me = self.st["user"]["id"]
 
         def done(d):
             self.admin_rows = d["users"]
         for i, u in enumerate(self.admin_rows):
-            r = pygame.Rect(area.x, y0 + i * 52, area.w - 4, 46)
+            r = pygame.Rect(area.x, y0 + i * 56, area.w - 4, 50)
             self.panel(r, (250, 225, 220) if u["banned"] else CARD, 10)
             self.txt(u["username"], (r.x + 12, r.y + 5), self.f_mb, INK, "topleft", 170)
-            self.txt("%s · %s · %d XP" % (u["role"], u["pet"], u["xp"]), (r.x + 12, r.y + 25), self.f_s, GREY, "topleft", 230)
+            self.txt("%s · %s · %d XP" % (u["role"], u["pet"], u["xp"]), (r.x + 12, r.y + 25), self.f_s, MUTED, "topleft", 230)
             if u["id"] == me:
-                self.txt("(bạn)", (r.right - 20, r.centery), self.f_s, GREY, "midright")
+                self.txt("(bạn)", (r.right - 20, r.centery), self.f_s, MUTED, "midright")
                 continue
             base = "/admin/users/%d" % u["id"]
             if self.button((r.x + 260, r.y + 7, 110, 32), "Mở khoá" if u["banned"] else "Khoá", GREEN if u["banned"] else ORANGE, font=self.f_s):
@@ -1009,19 +1067,19 @@ class App:
         self.txt("Lịch sử giao dịch coin (%d gần nhất)" % len(self.tx_rows), (36, TOP + 20), self.f_l, INK, "topleft", 460)
         area = pygame.Rect(30, TOP + 62, W - 60, H - TOP - NAV - 86)
         if not self.tx_rows:
-            self.txt("Chưa có giao dịch nào", (W // 2, TOP + 120), self.f_m, GREY, "center")
+            self.txt("Chưa có giao dịch nào", (W // 2, TOP + 120), self.f_m, MUTED, "center")
         y0 = self.scroll_begin("list", area, len(self.tx_rows) * 44)
         tz = dt.timezone(dt.timedelta(hours=7))
         for i, t in enumerate(self.tx_rows):
             r = pygame.Rect(area.x, y0 + i * 44, area.w - 4, 40)
             self.panel(r, CARD, 8)
             when = dt.datetime.fromtimestamp(t["ts"], tz).strftime("%d/%m %H:%M")
-            self.txt(when, (r.x + 10, r.centery), self.f_s, GREY, "midleft")
+            self.txt(when, (r.x + 10, r.centery), self.f_s, MUTED, "midleft")
             self.txt(t["user"], (r.x + 90, r.centery), self.f_mb, INK, "midleft", 130)
             what = TX_VN.get(t["reason"], t["reason"]) + (": " + t["ref"] if t["ref"] else "")
             self.txt(what, (r.x + 230, r.centery), self.f_s, INK, "midleft", 290)
             self.txt("%+d" % t["delta"], (r.right - 110, r.centery), self.f_mb, GREEN if t["delta"] > 0 else RED, "midright")
-            self.txt("dư %d" % t["balance"], (r.right - 14, r.centery), self.f_s, GREY, "midright")
+            self.txt("dư %d" % t["balance"], (r.right - 14, r.centery), self.f_s, MUTED, "midright")
         self.scroll_end()
 
 
