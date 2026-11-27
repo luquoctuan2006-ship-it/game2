@@ -1087,9 +1087,15 @@ async def main():
     app = App()
     running = True
     while running:
-        dt_ = min(app.clock.tick(60) / 1000.0, 0.1)
-        running = app.handle_events()
-        app.frame(dt_)
+        try:
+            dt_ = min(app.clock.tick(60) / 1000.0, 0.1)
+            running = app.handle_events()
+            app.frame(dt_)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()                 # in ra Console của trình duyệt
+            app.net.pending.clear()               # bỏ request đang treo
+            app.toast("Lỗi: %s" % str(e)[:60], "err")
         pygame.display.flip()
         await asyncio.sleep(0)
     pygame.quit()
